@@ -1,0 +1,21 @@
+# Example local languages.toml for literatemd-lsp
+#
+# Place a `languages.toml` file in your project root to override/extend
+# the Helix configuration. This is useful for project-specific LSP settings.
+#
+# The LSP configuration is loaded in this order (later overrides earlier):
+# 1. ~/.config/helix/languages.toml (Helix global config)
+# 2. ./languages.toml (this file, if present in current directory)
+
+# Override or add LSP configurations here
+# Example: customize gopls for this project
+
+[language-server.notaserver]
+command = "/tmp/notaserver"
+
+[language-server.notaserver.config.hints]
+notAnArg = false
+
+[[language]]
+name = "notalang"
+language-servers = ["notaserver"]
