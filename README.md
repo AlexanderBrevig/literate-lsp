@@ -45,6 +45,9 @@ All while keeping your documentation as the source of truth.
 Add to your `~/.config/helix/languages.toml`:
 
 ```toml
+[language-server.literate-lsp]
+command = "literate-lsp"
+
 [[language]]
 name = "markdown"
 language-servers = ["literate-lsp"]
