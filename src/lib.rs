@@ -1,4 +1,5 @@
 pub mod child_lsp;
+pub mod child_lsp_init;
 pub mod config;
 pub mod health;
 pub mod position;

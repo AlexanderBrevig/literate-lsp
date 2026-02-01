@@ -1,4 +1,5 @@
 use crate::child_lsp::ChildLspManager;
+use crate::child_lsp_init::{ChildLspInitializer, ChildLspInitParams};
 use crate::config::Config;
 use crate::position::PositionMapper;
 use crate::request_mapper;
@@ -369,46 +370,25 @@ impl LiterateLsp {
         let mut child_lsps = self.child_lsps.write().await;
 
         if !child_lsps.contains_key(&lang) {
-            match ChildLspManager::spawn(&binary_name, args).await {
-                Ok(lsp) => {
-                    let init_options = self.config.get_init_options(&lang);
-                    if let Err(e) = lsp
-                        .initialize(root_uri_base.to_string(), init_options)
-                        .await
-                    {
-                        self.client
-                            .log_message(
-                                MessageType::ERROR,
-                                format!("Failed to initialize child LSP: {}", e),
-                            )
-                            .await;
-                        return Ok(json!(null));
-                    }
+            let init_params = ChildLspInitParams {
+                lang: lang.clone(),
+                binary_name,
+                args,
+                root_uri_base: root_uri_base.to_string(),
+                virtual_uri: virtual_uri.clone(),
+                virtual_doc_content: vdoc.content.clone(),
+                init_options: self.config.get_init_options(&lang),
+            };
 
-                    if let Err(e) = lsp
-                        .did_open(virtual_uri.clone(), lang.clone(), vdoc.content.clone())
-                        .await
-                    {
-                        self.client
-                            .log_message(
-                                MessageType::ERROR,
-                                format!("Failed to open virtual document: {}", e),
-                            )
-                            .await;
-                        return Ok(json!(null));
-                    }
-
-                    // Cache completion trigger characters
-                    self.cache_completion_triggers(&lang, &lsp).await;
-
-                    child_lsps.insert(lang.clone(), lsp);
+            match ChildLspInitializer::initialize_child_lsp(init_params).await {
+                Ok(result) => {
+                    // Cache completion triggers after successful initialization
+                    self.cache_completion_triggers(&result.lang, &result.lsp).await;
+                    child_lsps.insert(result.lang, result.lsp);
                 }
-                Err(e) => {
+                Err(error_msg) => {
                     self.client
-                        .log_message(
-                            MessageType::ERROR,
-                            format!("Failed to spawn child LSP: {}", e),
-                        )
+                        .log_message(MessageType::ERROR, error_msg)
                         .await;
                     return Ok(json!(null));
                 }
@@ -632,16 +612,19 @@ impl LanguageServer for LiterateLsp {
             let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
             if !child_lsps.contains_key(&lang) {
-                if let Ok(lsp) = ChildLspManager::spawn(&binary_name, args).await {
-                    let init_options = self.config.get_init_options(&lang);
-                    let _ = lsp
-                        .initialize(root_uri_base.to_string(), init_options)
-                        .await;
-                    let _ = lsp
-                        .did_open(virtual_uri.clone(), lang.clone(), vdoc.content.clone())
-                        .await;
-                    self.cache_completion_triggers(&lang, &lsp).await;
-                    child_lsps.insert(lang.clone(), lsp);
+                let init_params = ChildLspInitParams {
+                    lang: lang.clone(),
+                    binary_name,
+                    args,
+                    root_uri_base: root_uri_base.to_string(),
+                    virtual_uri: virtual_uri.clone(),
+                    virtual_doc_content: vdoc.content.clone(),
+                    init_options: self.config.get_init_options(&lang),
+                };
+
+                if let Ok(result) = ChildLspInitializer::initialize_child_lsp(init_params).await {
+                    self.cache_completion_triggers(&result.lang, &result.lsp).await;
+                    child_lsps.insert(result.lang, result.lsp);
                 }
             }
 
@@ -708,16 +691,19 @@ impl LanguageServer for LiterateLsp {
             let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
             if !child_lsps.contains_key(&lang) {
-                if let Ok(lsp) = ChildLspManager::spawn(&binary_name, args).await {
-                    let init_options = self.config.get_init_options(&lang);
-                    let _ = lsp
-                        .initialize(root_uri_base.to_string(), init_options)
-                        .await;
-                    let _ = lsp
-                        .did_open(virtual_uri.clone(), lang.clone(), vdoc.content.clone())
-                        .await;
-                    self.cache_completion_triggers(&lang, &lsp).await;
-                    child_lsps.insert(lang.clone(), lsp);
+                let init_params = ChildLspInitParams {
+                    lang: lang.clone(),
+                    binary_name,
+                    args,
+                    root_uri_base: root_uri_base.to_string(),
+                    virtual_uri: virtual_uri.clone(),
+                    virtual_doc_content: vdoc.content.clone(),
+                    init_options: self.config.get_init_options(&lang),
+                };
+
+                if let Ok(result) = ChildLspInitializer::initialize_child_lsp(init_params).await {
+                    self.cache_completion_triggers(&result.lang, &result.lsp).await;
+                    child_lsps.insert(result.lang, result.lsp);
                 }
             }
 
