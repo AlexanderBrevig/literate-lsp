@@ -58,11 +58,23 @@ impl LanguageConfig {
     pub fn get_server_names(&self) -> Vec<String> {
         self.language_servers
             .iter()
-            .map(|entry| match entry {
-                LanguageServerEntry::String(s) => s.clone(),
-                LanguageServerEntry::Object(obj) => obj.name.clone(),
-            })
+            .map(|entry| entry.to_server_name())
             .collect()
+    }
+}
+
+/// Extension trait for extracting server names from LanguageServerEntry
+pub trait LanguageServerEntryExt {
+    /// Extract the server name regardless of variant (String or Object)
+    fn to_server_name(&self) -> String;
+}
+
+impl LanguageServerEntryExt for LanguageServerEntry {
+    fn to_server_name(&self) -> String {
+        match self {
+            LanguageServerEntry::String(s) => s.clone(),
+            LanguageServerEntry::Object(obj) => obj.name.clone(),
+        }
     }
 }
 
@@ -192,10 +204,7 @@ impl Config {
         // If not found, try to find the language and walk its LSPs
         if let Some(language) = self.language.iter().find(|l| l.name == lang) {
             for server_entry in &language.language_servers {
-                let server_name = match server_entry {
-                    LanguageServerEntry::String(s) => s.clone(),
-                    LanguageServerEntry::Object(obj) => obj.name.clone(),
-                };
+                let server_name = server_entry.to_server_name();
 
                 // Skip forbidden LSPs
                 if self.is_format_forbidden(&server_name) {
@@ -250,39 +259,36 @@ impl Config {
 
         // If not found, try to find the language and walk its LSPs
         if let Some(language) = self.language.iter().find(|l| l.name == lang) {
-            eprintln!("[Config] Found language '{}' with {} servers", lang, language.language_servers.len());
+            info!("[Config] Found language '{}' with {} servers", lang, language.language_servers.len());
             for server_entry in &language.language_servers {
-                let server_name = match server_entry {
-                    LanguageServerEntry::String(s) => s.clone(),
-                    LanguageServerEntry::Object(obj) => obj.name.clone(),
-                };
+                let server_name = server_entry.to_server_name();
 
-                eprintln!("[Config] Checking server '{}'", server_name);
+                info!("[Config] Checking server '{}'", server_name);
 
                 // Skip forbidden LSPs
                 if self.is_format_forbidden(&server_name) {
-                    eprintln!("[Config] Server '{}' is forbidden", server_name);
+                    info!("[Config] Server '{}' is forbidden", server_name);
                     continue;
                 }
 
                 // Check if this LSP has a command and it exists in PATH
                 if let Some(lsp_cfg) = self.language_server.get(&server_name) {
-                    eprintln!("[Config] Server '{}' command: '{}'", server_name, lsp_cfg.command);
+                    info!("[Config] Server '{}' command: '{}'", server_name, lsp_cfg.command);
                     if !lsp_cfg.command.is_empty() {
                         // Check if the binary exists in PATH
                         if Self::command_exists(&lsp_cfg.command) {
-                            eprintln!("[Config] Server '{}' command found in PATH", server_name);
+                            info!("[Config] Server '{}' command found in PATH", server_name);
                             return Some((lsp_cfg.command.clone(), lsp_cfg.args.clone()));
                         } else {
-                            eprintln!("[Config] Server '{}' command NOT found in PATH", server_name);
+                            info!("[Config] Server '{}' command NOT found in PATH", server_name);
                         }
                     }
                 } else {
-                    eprintln!("[Config] Server '{}' not found in language_server map", server_name);
+                    info!("[Config] Server '{}' not found in language_server map", server_name);
                 }
             }
         } else {
-            eprintln!("[Config] Language '{}' not found in config", lang);
+            info!("[Config] Language '{}' not found in config", lang);
         }
 
         None
@@ -352,7 +358,7 @@ impl Default for Config {
         match toml::from_str::<Config>(HELIX_LANGUAGES_TOML) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!("Warning: Failed to parse embedded Helix config: {}", e);
+                warn!("Failed to parse embedded Helix config: {}", e);
                 // Minimal fallback if something goes wrong
                 let mut language_server = HashMap::new();
                 language_server.insert(
