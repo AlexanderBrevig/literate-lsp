@@ -1,5 +1,5 @@
-use literatemd_lsp::virtual_doc::{build_virtual_document, find_code_block_at_line};
-use literatemd_lsp::position::PositionMapper;
+use literate_lsp::position::PositionMapper;
+use literate_lsp::virtual_doc::{build_virtual_document, find_code_block_at_line};
 
 #[test]
 fn test_virtual_document_extraction() {
@@ -28,18 +28,42 @@ Now, `square` can be used to consume one off of the stack, and add the answer ba
     assert_eq!(vdoc.blocks.len(), 2, "Should find 2 forth code blocks");
 
     // Check first block
-    assert_eq!(vdoc.blocks[0].markdown_start, 7, "First block should start at line 7");
-    assert_eq!(vdoc.blocks[0].markdown_end, 9, "First block should end at line 9");
-    assert_eq!(vdoc.blocks[0].virtual_start, 0, "First block virtual should start at 0");
+    assert_eq!(
+        vdoc.blocks[0].markdown_start, 7,
+        "First block should start at line 7"
+    );
+    assert_eq!(
+        vdoc.blocks[0].markdown_end, 9,
+        "First block should end at line 9"
+    );
+    assert_eq!(
+        vdoc.blocks[0].virtual_start, 0,
+        "First block virtual should start at 0"
+    );
 
     // Check second block (starts at 2 due to newline separator between blocks)
-    assert_eq!(vdoc.blocks[1].markdown_start, 13, "Second block should start at line 13");
-    assert_eq!(vdoc.blocks[1].markdown_end, 15, "Second block should end at line 15");
-    assert_eq!(vdoc.blocks[1].virtual_start, 2, "Second block virtual should start at 2 (after newline separator)");
+    assert_eq!(
+        vdoc.blocks[1].markdown_start, 13,
+        "Second block should start at line 13"
+    );
+    assert_eq!(
+        vdoc.blocks[1].markdown_end, 15,
+        "Second block should end at line 15"
+    );
+    assert_eq!(
+        vdoc.blocks[1].virtual_start, 2,
+        "Second block virtual should start at 2 (after newline separator)"
+    );
 
     // Virtual document should contain both blocks
-    assert!(vdoc.content.contains("square"), "Virtual document should contain 'square'");
-    assert!(vdoc.content.contains("5 square"), "Virtual document should contain '5 square'");
+    assert!(
+        vdoc.content.contains("square"),
+        "Virtual document should contain 'square'"
+    );
+    assert!(
+        vdoc.content.contains("5 square"),
+        "Virtual document should contain '5 square'"
+    );
 }
 
 #[test]
@@ -87,7 +111,7 @@ fn test_position_mapping() {
     // - Block 0: md [7..9], content [8..8], maps to virtual line 0
     // - Block 1: md [13..15], content [14..14], maps to virtual line 2 (with newline between blocks)
     let blocks = vec![
-        literatemd_lsp::virtual_doc::CodeBlock {
+        literate_lsp::virtual_doc::CodeBlock {
             lang: "forth".to_string(),
             markdown_start: 7,
             markdown_end: 9,
@@ -97,7 +121,7 @@ fn test_position_mapping() {
             virtual_end: 1,
             content: ": square ( n -- n ) dup * ;    \\ ok\n".to_string(),
         },
-        literatemd_lsp::virtual_doc::CodeBlock {
+        literate_lsp::virtual_doc::CodeBlock {
             lang: "forth".to_string(),
             markdown_start: 13,
             markdown_end: 15,
@@ -151,6 +175,12 @@ fn test_example_md_parsing() {
     assert!(!vdoc.blocks.is_empty(), "Should extract forth blocks");
 
     // Virtual document should contain the definition and usage
-    assert!(vdoc.content.contains("square"), "Virtual doc should contain 'square' definition");
-    assert!(vdoc.content.contains("dup"), "Virtual doc should contain 'dup'");
+    assert!(
+        vdoc.content.contains("fib"),
+        "Virtual doc should contain 'fib' definition"
+    );
+    assert!(
+        vdoc.content.contains("dup"),
+        "Virtual doc should contain 'dup'"
+    );
 }
