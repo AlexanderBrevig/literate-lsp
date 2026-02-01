@@ -111,7 +111,7 @@ impl LiterateLsp {
             {
                 warn!("Failed to update child LSP for '{}': {}", lang, e);
             } else {
-                child_versions.insert(lang.clone(), current_version + 1);
+                child_versions.insert(lang.to_string(), current_version + 1);
             }
         }
     }
@@ -228,7 +228,7 @@ impl LiterateLsp {
         }
 
         let vdoc = build_virtual_document(doc_content, &lang);
-        let mapper = PositionMapper::new(vdoc.blocks.clone());
+        let mapper = PositionMapper::new(&vdoc.blocks);
 
         // If no code blocks found for this language, provide helpful feedback
         eprintln!(
@@ -371,12 +371,12 @@ impl LiterateLsp {
 
         if !child_lsps.contains_key(&lang) {
             let init_params = ChildLspInitParams {
-                lang: lang.clone(),
+                lang: lang.to_string(),
                 binary_name,
                 args,
                 root_uri_base: root_uri_base.to_string(),
                 virtual_uri: virtual_uri.clone(),
-                virtual_doc_content: vdoc.content.clone(),
+                virtual_doc_content: std::sync::Arc::new(vdoc.content.clone()),
                 init_options: self.config.get_init_options(&lang),
             };
 
@@ -401,7 +401,7 @@ impl LiterateLsp {
         };
 
         // Send request to child LSP
-        let mut response = match child_lsp.send_request_raw(method, params.clone()).await {
+        let mut response = match child_lsp.send_request_raw(method, params).await {
             Ok(resp) => resp,
             Err(e) => {
                 self.client
@@ -511,10 +511,9 @@ impl LanguageServer for LiterateLsp {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        let content = params.text_document.text.clone();
 
         let mut doc = self.document.write().await;
-        *doc = Some(content.clone());
+        *doc = Some(params.text_document.text.clone());
 
         let mut uri_lock = self.document_uri.write().await;
         *uri_lock = Some(uri);
@@ -592,7 +591,7 @@ impl LanguageServer for LiterateLsp {
         // Request position 0,0 to find the first language
         if let Some((lang, _, _)) = find_code_block_at_line(&doc_content, 0) {
             let vdoc = build_virtual_document(&doc_content, &lang);
-            let mapper = PositionMapper::new(vdoc.blocks.clone());
+            let mapper = PositionMapper::new(&vdoc.blocks);
 
             let mut req_params =
                 json!({"textDocument": {"uri": params.text_document.uri.to_string()}});
@@ -613,12 +612,12 @@ impl LanguageServer for LiterateLsp {
 
             if !child_lsps.contains_key(&lang) {
                 let init_params = ChildLspInitParams {
-                    lang: lang.clone(),
+                    lang: lang.to_string(),
                     binary_name,
                     args,
                     root_uri_base: root_uri_base.to_string(),
                     virtual_uri: virtual_uri.clone(),
-                    virtual_doc_content: vdoc.content.clone(),
+                    virtual_doc_content: std::sync::Arc::new(vdoc.content.clone()),
                     init_options: self.config.get_init_options(&lang),
                 };
 
@@ -671,7 +670,7 @@ impl LanguageServer for LiterateLsp {
         // For formatting, we need to format all code blocks
         if let Some((lang, _, _)) = find_code_block_at_line(&doc_content, 0) {
             let vdoc = build_virtual_document(&doc_content, &lang);
-            let mapper = PositionMapper::new(vdoc.blocks.clone());
+            let mapper = PositionMapper::new(&vdoc.blocks);
 
             let mut req_params =
                 json!({"textDocument": {"uri": params.text_document.uri.to_string()}});
@@ -692,12 +691,12 @@ impl LanguageServer for LiterateLsp {
 
             if !child_lsps.contains_key(&lang) {
                 let init_params = ChildLspInitParams {
-                    lang: lang.clone(),
+                    lang: lang.to_string(),
                     binary_name,
                     args,
                     root_uri_base: root_uri_base.to_string(),
                     virtual_uri: virtual_uri.clone(),
-                    virtual_doc_content: vdoc.content.clone(),
+                    virtual_doc_content: std::sync::Arc::new(vdoc.content.clone()),
                     init_options: self.config.get_init_options(&lang),
                 };
 

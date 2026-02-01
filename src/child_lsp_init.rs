@@ -1,6 +1,7 @@
 use crate::child_lsp::ChildLspManager;
 use crate::utils::logging;
 use anyhow::Result;
+use std::sync::Arc;
 use tracing::debug;
 
 /// Parameters required to initialize a child LSP
@@ -10,7 +11,7 @@ pub struct ChildLspInitParams {
     pub args: Vec<String>,
     pub root_uri_base: String,
     pub virtual_uri: String,
-    pub virtual_doc_content: String,
+    pub virtual_doc_content: Arc<String>,
     pub init_options: Option<serde_json::Value>,
 }
 
@@ -63,7 +64,7 @@ impl ChildLspInitializer {
             .did_open(
                 params.virtual_uri,
                 params.lang.clone(),
-                params.virtual_doc_content,
+                (*params.virtual_doc_content).clone(),
             )
             .await
         {

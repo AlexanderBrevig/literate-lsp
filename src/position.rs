@@ -1,17 +1,17 @@
 use tower_lsp::lsp_types::{Position, Range, Location, Url};
 use crate::virtual_doc::CodeBlock;
 
-pub struct PositionMapper {
-    blocks: Vec<CodeBlock>,
+pub struct PositionMapper<'a> {
+    blocks: &'a [CodeBlock],
 }
 
-impl PositionMapper {
-    pub fn new(blocks: Vec<CodeBlock>) -> Self {
+impl<'a> PositionMapper<'a> {
+    pub fn new(blocks: &'a [CodeBlock]) -> Self {
         PositionMapper { blocks }
     }
 
     pub fn markdown_to_virtual(&self, markdown_line: u32, col: u32) -> Option<(u32, u32)> {
-        for block in &self.blocks {
+        for block in self.blocks {
             // Check if position is within the content range (not in fence lines)
             if markdown_line >= block.content_start as u32
                 && markdown_line <= block.content_end as u32
@@ -25,7 +25,7 @@ impl PositionMapper {
     }
 
     pub fn virtual_to_markdown(&self, virtual_line: u32, col: u32) -> Option<(u32, u32)> {
-        for block in &self.blocks {
+        for block in self.blocks {
             if virtual_line >= block.virtual_start as u32
                 && virtual_line < block.virtual_end as u32
             {
@@ -91,7 +91,7 @@ mod tests {
             },
         ];
 
-        let mapper = PositionMapper::new(blocks);
+        let mapper = PositionMapper::new(&blocks);
         let (vline, col) = mapper.markdown_to_virtual(3, 5).unwrap();
         assert_eq!(vline, 0);
         assert_eq!(col, 5);
@@ -126,7 +126,7 @@ mod tests {
             },
         ];
 
-        let mapper = PositionMapper::new(blocks);
+        let mapper = PositionMapper::new(&blocks);
         let (mline, col) = mapper.virtual_to_markdown(0, 5).unwrap();
         assert_eq!(mline, 3);
         assert_eq!(col, 5);
