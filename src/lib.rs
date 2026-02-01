@@ -5,3 +5,4 @@ pub mod position;
 pub mod request_mapper;
 pub mod server;
 pub mod virtual_doc;
+pub mod utils;

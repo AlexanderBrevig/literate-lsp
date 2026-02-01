@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::position::PositionMapper;
 use crate::request_mapper;
 use crate::virtual_doc::{build_virtual_document, find_code_block_at_line};
+use crate::utils::{uri_helpers, constants};
 use regex::Regex;
 use serde_json::json;
 use std::sync::Arc;
@@ -96,11 +97,11 @@ impl LiterateLsp {
         };
         drop(uri);
 
-        let root_uri_base = uri_str.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+        let root_uri_base = uri_helpers::extract_root_uri_base(&uri_str);
 
         for (lang, child_lsp) in child_lsps.iter_mut() {
             let vdoc = build_virtual_document(doc_content, lang);
-            let virtual_uri = format!("{}/virtual.{}", root_uri_base, lang);
+            let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, lang);
             let current_version = child_versions.get(lang).copied().unwrap_or(0);
 
             if let Err(e) = child_lsp
@@ -281,9 +282,9 @@ impl LiterateLsp {
         }
 
         // Write virtual document to /tmp for inspection
-        let vdoc_path = format!("/tmp/virtual.{}", lang);
+        let vdoc_path = uri_helpers::construct_temp_vdoc_path(&lang);
         if let Err(e) = std::fs::write(&vdoc_path, &vdoc.content) {
-            eprintln!(
+            warn!(
                 "Warning: Failed to write virtual doc to {}: {}",
                 vdoc_path, e
             );
@@ -291,8 +292,8 @@ impl LiterateLsp {
 
         // Construct the virtual document URI before building params
         let root_uri_str = uri.to_string();
-        let root_uri_base = root_uri_str.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-        let virtual_uri = format!("{}/virtual.{}", root_uri_base, lang);
+        let root_uri_base = uri_helpers::extract_root_uri_base(&root_uri_str);
+        let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
         // Build the request parameters with virtual document URI
         let mut params = json!({
@@ -484,7 +485,12 @@ impl LanguageServer for LiterateLsp {
         let triggers = self.get_all_completion_triggers().await;
         let trigger_chars = if triggers.is_empty() {
             // Default common trigger characters across languages
-            Some(vec![" ".to_string(), ".".to_string()])
+            Some(
+                constants::DEFAULT_COMPLETION_TRIGGERS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            )
         } else {
             Some(triggers)
         };
@@ -622,8 +628,8 @@ impl LanguageServer for LiterateLsp {
 
             let mut child_lsps = self.child_lsps.write().await;
             let root_uri_str = params.text_document.uri.to_string();
-            let root_uri_base = root_uri_str.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-            let virtual_uri = format!("{}/virtual.{}", root_uri_base, lang);
+            let root_uri_base = uri_helpers::extract_root_uri_base(&root_uri_str);
+            let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
             if !child_lsps.contains_key(&lang) {
                 if let Ok(lsp) = ChildLspManager::spawn(&binary_name, args).await {
@@ -698,8 +704,8 @@ impl LanguageServer for LiterateLsp {
 
             let mut child_lsps = self.child_lsps.write().await;
             let root_uri_str = params.text_document.uri.to_string();
-            let root_uri_base = root_uri_str.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-            let virtual_uri = format!("{}/virtual.{}", root_uri_base, lang);
+            let root_uri_base = uri_helpers::extract_root_uri_base(&root_uri_str);
+            let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
             if !child_lsps.contains_key(&lang) {
                 if let Ok(lsp) = ChildLspManager::spawn(&binary_name, args).await {
