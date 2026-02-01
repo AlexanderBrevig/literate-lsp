@@ -20,6 +20,7 @@ pub struct LiterateLsp {
     document_version: Arc<RwLock<i32>>,
     child_lsps: Arc<RwLock<std::collections::HashMap<String, ChildLspManager>>>,
     child_versions: Arc<RwLock<std::collections::HashMap<String, i32>>>,
+    completion_triggers: Arc<RwLock<std::collections::HashMap<String, Vec<String>>>>,
 }
 
 impl LiterateLsp {
@@ -32,6 +33,7 @@ impl LiterateLsp {
             document_version: Arc::new(RwLock::new(0)),
             child_lsps: Arc::new(RwLock::new(std::collections::HashMap::new())),
             child_versions: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            completion_triggers: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -61,6 +63,26 @@ impl LiterateLsp {
             Some("forth") if block_lang == "forth" => true,
             _ => false,
         }
+    }
+
+    /// Cache completion trigger characters from a child LSP
+    async fn cache_completion_triggers(&self, lang: &str, child_lsp: &ChildLspManager) {
+        if let Some(triggers) = child_lsp.get_completion_trigger_characters().await {
+            let mut cache = self.completion_triggers.write().await;
+            cache.insert(lang.to_string(), triggers);
+        }
+    }
+
+    /// Get all known completion trigger characters
+    async fn get_all_completion_triggers(&self) -> Vec<String> {
+        let cache = self.completion_triggers.read().await;
+        let mut triggers = std::collections::HashSet::new();
+        for (_, chars) in cache.iter() {
+            for c in chars {
+                triggers.insert(c.clone());
+            }
+        }
+        triggers.into_iter().collect()
     }
 
     /// Update all child LSPs with changed virtual documents
@@ -375,6 +397,9 @@ impl LiterateLsp {
                         return Ok(json!(null));
                     }
 
+                    // Cache completion trigger characters
+                    self.cache_completion_triggers(&lang, &lsp).await;
+
                     child_lsps.insert(lang.clone(), lsp);
                 }
                 Err(e) => {
@@ -454,6 +479,16 @@ impl LanguageServer for LiterateLsp {
     async fn initialize(&self, _params: InitializeParams) -> JsonrpcResult<InitializeResult> {
         // Declare capabilities for all position-based LSP methods
         // These are supported as long as the underlying language has an LSP available
+
+        // Get trigger characters that we've learned from child LSPs, or use defaults
+        let triggers = self.get_all_completion_triggers().await;
+        let trigger_chars = if triggers.is_empty() {
+            // Default common trigger characters across languages
+            Some(vec![" ".to_string(), ".".to_string()])
+        } else {
+            Some(triggers)
+        };
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 // Text sync is required - we use FULL sync to update virtual documents
@@ -469,6 +504,13 @@ impl LanguageServer for LiterateLsp {
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: None,
+                    trigger_characters: trigger_chars,
+                    work_done_progress_options: Default::default(),
+                    all_commit_characters: None,
+                    completion_item: None,
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -592,6 +634,7 @@ impl LanguageServer for LiterateLsp {
                     let _ = lsp
                         .did_open(virtual_uri.clone(), lang.clone(), vdoc.content.clone())
                         .await;
+                    self.cache_completion_triggers(&lang, &lsp).await;
                     child_lsps.insert(lang.clone(), lsp);
                 }
             }
@@ -667,6 +710,7 @@ impl LanguageServer for LiterateLsp {
                     let _ = lsp
                         .did_open(virtual_uri.clone(), lang.clone(), vdoc.content.clone())
                         .await;
+                    self.cache_completion_triggers(&lang, &lsp).await;
                     child_lsps.insert(lang.clone(), lsp);
                 }
             }
@@ -693,6 +737,23 @@ impl LanguageServer for LiterateLsp {
 
         let response = self
             .handle_position_request("textDocument/rangeFormatting", position, uri)
+            .await?;
+        if let Some(result) = response.get("result") {
+            Ok(serde_json::from_value(result.clone()).ok())
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn completion(
+        &self,
+        params: CompletionParams,
+    ) -> JsonrpcResult<Option<CompletionResponse>> {
+        let position = params.text_document_position.position;
+        let uri = params.text_document_position.text_document.uri;
+
+        let response = self
+            .handle_position_request("textDocument/completion", position, uri)
             .await?;
         if let Some(result) = response.get("result") {
             Ok(serde_json::from_value(result.clone()).ok())

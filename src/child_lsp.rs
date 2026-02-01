@@ -167,6 +167,25 @@ impl ChildLspManager {
         caps.as_ref().cloned()
     }
 
+    pub async fn get_completion_trigger_characters(&self) -> Option<Vec<String>> {
+        if let Some(caps) = self.get_capabilities().await {
+            // Navigate to completionProvider.triggerCharacters
+            if let Some(triggers) = caps
+                .get("completionProvider")
+                .and_then(|cp| cp.get("triggerCharacters"))
+                .and_then(|tc| tc.as_array())
+            {
+                return Some(
+                    triggers
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect(),
+                );
+            }
+        }
+        None
+    }
+
     async fn send_notification(&self, method: &str, params: Value) -> Result<()> {
         let notification = json!({
             "jsonrpc": "2.0",
