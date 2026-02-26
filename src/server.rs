@@ -1,10 +1,11 @@
 use crate::child_lsp::ChildLspManager;
 use crate::child_lsp_init::{ChildLspInitializer, ChildLspInitParams};
 use crate::config::Config;
+use crate::disk_vdoc::DiskVirtualDoc;
 use crate::position::PositionMapper;
 use crate::request_mapper;
 use crate::virtual_doc::{build_virtual_document, find_code_block_at_line};
-use crate::utils::{uri_helpers, constants};
+use crate::utils::constants;
 use regex::Regex;
 use serde_json::json;
 use std::sync::Arc;
@@ -23,6 +24,8 @@ pub struct LiterateLsp {
     child_lsps: Arc<RwLock<std::collections::HashMap<String, ChildLspManager>>>,
     child_versions: Arc<RwLock<std::collections::HashMap<String, i32>>>,
     completion_triggers: Arc<RwLock<std::collections::HashMap<String, Vec<String>>>>,
+    project_root: Arc<RwLock<Option<std::path::PathBuf>>>,
+    output_dir: Arc<RwLock<String>>,
 }
 
 impl LiterateLsp {
@@ -36,6 +39,8 @@ impl LiterateLsp {
             child_lsps: Arc::new(RwLock::new(std::collections::HashMap::new())),
             child_versions: Arc::new(RwLock::new(std::collections::HashMap::new())),
             completion_triggers: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            project_root: Arc::new(RwLock::new(None)),
+            output_dir: Arc::new(RwLock::new("./src".to_string())),
         }
     }
 
@@ -87,26 +92,84 @@ impl LiterateLsp {
         triggers.into_iter().collect()
     }
 
+    /// Helper method to write virtual document to disk and get file URI
+    fn write_virtual_doc_to_disk(
+        &self,
+        project_root: &std::path::Path,
+        output_dir: &str,
+        markdown_filename: &str,
+        lang: &str,
+        vdoc_content: String,
+    ) -> anyhow::Result<String> {
+        let extension = self.config.get_extension_for_language(lang)
+            .unwrap_or_else(|| lang.to_string());
+
+        let disk_doc = DiskVirtualDoc::write_to_disk(
+            project_root,
+            output_dir,
+            markdown_filename,
+            lang,
+            &extension,
+            vdoc_content,
+        )?;
+
+        Ok(disk_doc.to_uri())
+    }
+
+    /// Get the LSP root URI - always uses output_dir as the LSP root
+    fn get_lsp_root_uri(&self, project_root: &std::path::Path, output_dir: &str) -> String {
+        let output_path = if output_dir.starts_with('/') {
+            std::path::PathBuf::from(output_dir)
+        } else {
+            project_root.join(output_dir)
+        };
+        format!("file://{}", output_path.display())
+    }
+
     /// Update all child LSPs with changed virtual documents
     async fn update_child_lsps(&self, doc_content: &str, _new_version: i32) {
         let mut child_lsps = self.child_lsps.write().await;
         let mut child_versions = self.child_versions.write().await;
         let uri = self.document_uri.read().await;
-        let uri_str = match uri.as_ref() {
-            Some(u) => u.to_string(),
+        let markdown_filename = match uri.as_ref() {
+            Some(u) => {
+                u
+                    .path_segments()
+                    .and_then(|mut segs| segs.next_back())
+                    .unwrap_or("document")
+                    .to_string()
+            },
             None => return,
         };
         drop(uri);
 
-        let root_uri_base = uri_helpers::extract_root_uri_base(&uri_str);
+        let project_root = self.project_root.read().await;
+        let output_dir = self.output_dir.read().await;
 
         for (lang, child_lsp) in child_lsps.iter_mut() {
             let vdoc = build_virtual_document(doc_content, lang);
-            let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, lang);
+
+            // Write virtual doc to disk
+            let file_uri = match project_root.as_ref() {
+                Some(root) => {
+                    match self.write_virtual_doc_to_disk(root, &output_dir, &markdown_filename, lang, vdoc.content.clone()) {
+                        Ok(uri) => uri,
+                        Err(e) => {
+                            warn!("Failed to write virtual doc for '{}': {}", lang, e);
+                            continue;
+                        }
+                    }
+                }
+                None => {
+                    warn!("Project root not available for language '{}'", lang);
+                    continue;
+                }
+            };
+
             let current_version = child_versions.get(lang).copied().unwrap_or(0);
 
             if let Err(e) = child_lsp
-                .did_change(virtual_uri, current_version + 1, vdoc.content)
+                .did_change(file_uri, current_version + 1, vdoc.content)
                 .await
             {
                 warn!("Failed to update child LSP for '{}': {}", lang, e);
@@ -177,8 +240,8 @@ impl LiterateLsp {
         position: Position,
         uri: Url,
     ) -> JsonrpcResult<serde_json::Value> {
-        eprintln!(
-            "[Hover] Request: {} at line:{} char:{}",
+        info!(
+            "Request: {} at line:{} char:{}",
             method, position.line, position.character
         );
 
@@ -207,8 +270,8 @@ impl LiterateLsp {
         // Skip self-referential cases (e.g., markdown blocks in markdown files)
         let doc_lang = Self::get_document_language(&uri);
         if Self::should_skip_language(doc_lang.as_deref(), &lang) {
-            eprintln!(
-                "[LiterateLsp] Skipping language '{}' (self-referential)",
+            info!(
+                "Skipping language '{}' (self-referential)",
                 lang
             );
             let message = format!(
@@ -231,10 +294,10 @@ impl LiterateLsp {
         let mapper = PositionMapper::new(&vdoc.blocks);
 
         // If no code blocks found for this language, provide helpful feedback
-        eprintln!(
-            "[Hover] Virtual doc empty: {}, blocks: {}",
-            vdoc.content.is_empty(),
-            vdoc.blocks.len()
+        info!(
+            "Virtual doc blocks: {}, empty: {}",
+            vdoc.blocks.len(),
+            vdoc.content.is_empty()
         );
         if vdoc.content.is_empty() {
             debug!("[Hover] Building helpful message for missing language");
@@ -282,23 +345,34 @@ impl LiterateLsp {
             return Ok(hover_response);
         }
 
-        // Write virtual document to /tmp for inspection
-        let vdoc_path = uri_helpers::construct_temp_vdoc_path(&lang);
-        if let Err(e) = std::fs::write(&vdoc_path, &vdoc.content) {
-            warn!(
-                "Warning: Failed to write virtual doc to {}: {}",
-                vdoc_path, e
-            );
-        }
+        // Write virtual document to disk
+        let project_root = self.project_root.read().await;
+        let output_dir = self.output_dir.read().await;
 
-        // Construct the virtual document URI before building params
-        let root_uri_str = uri.to_string();
-        let root_uri_base = uri_helpers::extract_root_uri_base(&root_uri_str);
-        let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
+        let markdown_filename = uri
+            .path_segments()
+            .and_then(|mut segs| segs.next_back())
+            .unwrap_or("document");
 
-        // Build the request parameters with virtual document URI
+        let file_uri = match project_root.as_ref() {
+            Some(root) => {
+                match self.write_virtual_doc_to_disk(root, &output_dir, markdown_filename, &lang, vdoc.content.clone()) {
+                    Ok(uri) => uri,
+                    Err(e) => {
+                        warn!("Failed to write virtual document to disk: {}", e);
+                        return Ok(json!(null));
+                    }
+                }
+            }
+            None => {
+                warn!("Project root not detected, cannot write virtual document to disk");
+                return Ok(json!(null));
+            }
+        };
+
+        // Build the request parameters with real file URI
         let mut params = json!({
-            "textDocument": { "uri": virtual_uri.clone() },
+            "textDocument": { "uri": file_uri.clone() },
             "position": { "line": position.line, "character": position.character }
         });
 
@@ -359,8 +433,8 @@ impl LiterateLsp {
                         "contents": message
                     }
                 });
-                eprintln!(
-                    "[Hover] Returning unsupported language message for '{}'",
+                info!(
+                    "No LSP configured for language '{}'",
                     lang
                 );
                 return Ok(hover_response);
@@ -370,13 +444,24 @@ impl LiterateLsp {
         let mut child_lsps = self.child_lsps.write().await;
 
         if !child_lsps.contains_key(&lang) {
+            // Get project root for initialization
+            let project_root = self.project_root.read().await;
+            let output_dir = self.output_dir.read().await;
+            let root_uri = match project_root.as_ref() {
+                Some(root) => self.get_lsp_root_uri(root, &output_dir),
+                None => {
+                    warn!("Project root not available for child LSP initialization");
+                    return Ok(json!(null));
+                }
+            };
+
             let init_params = ChildLspInitParams {
                 lang: lang.to_string(),
                 binary_name,
                 args,
-                root_uri_base: root_uri_base.to_string(),
-                virtual_uri: virtual_uri.clone(),
-                virtual_doc_content: std::sync::Arc::new(vdoc.content.clone()),
+                root_uri,
+                file_uri: file_uri.clone(),
+                file_content: vdoc.content.clone(),
                 init_options: self.config.get_init_options(&lang),
             };
 
@@ -416,12 +501,6 @@ impl LiterateLsp {
 
         // Rewrite response positions back to markdown coordinates
         request_mapper::rewrite_positions(&mut response, &mapper, false);
-
-        // Get markdown filename for reference mapping
-        let markdown_filename = uri
-            .path_segments()
-            .and_then(|mut segs| segs.next_back())
-            .unwrap_or("document");
 
         // Map virtual document file references in text content back to markdown
         if let Some(result) = response.get_mut("result") {
@@ -516,10 +595,22 @@ impl LanguageServer for LiterateLsp {
         *doc = Some(params.text_document.text.clone());
 
         let mut uri_lock = self.document_uri.write().await;
-        *uri_lock = Some(uri);
+        *uri_lock = Some(uri.clone());
 
         let mut version = self.document_version.write().await;
         *version = params.text_document.version;
+
+        // Detect project root and load configuration
+        if let Ok(path) = uri.to_file_path() {
+            let project_root = crate::config::find_project_root(&path);
+            let literate_config = crate::config::load_literate_config(&project_root);
+
+            let mut root_lock = self.project_root.write().await;
+            *root_lock = Some(project_root);
+
+            let mut output_lock = self.output_dir.write().await;
+            *output_lock = literate_config.output_dir;
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -593,10 +684,6 @@ impl LanguageServer for LiterateLsp {
             let vdoc = build_virtual_document(&doc_content, &lang);
             let mapper = PositionMapper::new(&vdoc.blocks);
 
-            let mut req_params =
-                json!({"textDocument": {"uri": params.text_document.uri.to_string()}});
-            request_mapper::rewrite_positions(&mut req_params, &mapper, true);
-
             let (binary_name, args) = match self.config.get_command_and_args(&lang) {
                 Some((cmd, args)) => (cmd, args),
                 None => {
@@ -605,19 +692,53 @@ impl LanguageServer for LiterateLsp {
                 }
             };
 
+            // Write virtual doc to disk
+            let project_root = self.project_root.read().await;
+            let output_dir = self.output_dir.read().await;
+
+            let markdown_filename = params.text_document.uri
+                .path_segments()
+                .and_then(|mut segs| segs.next_back())
+                .unwrap_or("document");
+
+            let file_uri = match project_root.as_ref() {
+                Some(root) => {
+                    match self.write_virtual_doc_to_disk(root, &output_dir, markdown_filename, &lang, vdoc.content.clone()) {
+                        Ok(uri) => uri,
+                        Err(e) => {
+                            warn!("Failed to write virtual doc for document_symbol: {}", e);
+                            return Ok(None);
+                        }
+                    }
+                }
+                None => {
+                    warn!("Project root not available for document_symbol");
+                    return Ok(None);
+                }
+            };
+
+            let mut req_params =
+                json!({"textDocument": {"uri": file_uri.clone()}});
+            request_mapper::rewrite_positions(&mut req_params, &mapper, true);
+
             let mut child_lsps = self.child_lsps.write().await;
-            let root_uri_str = params.text_document.uri.to_string();
-            let root_uri_base = uri_helpers::extract_root_uri_base(&root_uri_str);
-            let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
             if !child_lsps.contains_key(&lang) {
+                let root_uri = match project_root.as_ref() {
+                    Some(root) => self.get_lsp_root_uri(root, &output_dir),
+                    None => {
+                        warn!("Project root not available for child LSP initialization");
+                        return Ok(None);
+                    }
+                };
+
                 let init_params = ChildLspInitParams {
                     lang: lang.to_string(),
                     binary_name,
                     args,
-                    root_uri_base: root_uri_base.to_string(),
-                    virtual_uri: virtual_uri.clone(),
-                    virtual_doc_content: std::sync::Arc::new(vdoc.content.clone()),
+                    root_uri,
+                    file_uri: file_uri.clone(),
+                    file_content: vdoc.content.clone(),
                     init_options: self.config.get_init_options(&lang),
                 };
 
@@ -672,10 +793,6 @@ impl LanguageServer for LiterateLsp {
             let vdoc = build_virtual_document(&doc_content, &lang);
             let mapper = PositionMapper::new(&vdoc.blocks);
 
-            let mut req_params =
-                json!({"textDocument": {"uri": params.text_document.uri.to_string()}});
-            request_mapper::rewrite_positions(&mut req_params, &mapper, true);
-
             let (binary_name, args) = match self.config.get_command_and_args(&lang) {
                 Some((cmd, args)) => (cmd, args),
                 None => {
@@ -684,19 +801,53 @@ impl LanguageServer for LiterateLsp {
                 }
             };
 
+            // Write virtual doc to disk
+            let project_root = self.project_root.read().await;
+            let output_dir = self.output_dir.read().await;
+
+            let markdown_filename = params.text_document.uri
+                .path_segments()
+                .and_then(|mut segs| segs.next_back())
+                .unwrap_or("document");
+
+            let file_uri = match project_root.as_ref() {
+                Some(root) => {
+                    match self.write_virtual_doc_to_disk(root, &output_dir, markdown_filename, &lang, vdoc.content.clone()) {
+                        Ok(uri) => uri,
+                        Err(e) => {
+                            warn!("Failed to write virtual doc for formatting: {}", e);
+                            return Ok(None);
+                        }
+                    }
+                }
+                None => {
+                    warn!("Project root not available for formatting");
+                    return Ok(None);
+                }
+            };
+
+            let mut req_params =
+                json!({"textDocument": {"uri": file_uri.clone()}});
+            request_mapper::rewrite_positions(&mut req_params, &mapper, true);
+
             let mut child_lsps = self.child_lsps.write().await;
-            let root_uri_str = params.text_document.uri.to_string();
-            let root_uri_base = uri_helpers::extract_root_uri_base(&root_uri_str);
-            let virtual_uri = uri_helpers::construct_virtual_uri(root_uri_base, &lang);
 
             if !child_lsps.contains_key(&lang) {
+                let root_uri = match project_root.as_ref() {
+                    Some(root) => self.get_lsp_root_uri(root, &output_dir),
+                    None => {
+                        warn!("Project root not available for child LSP initialization");
+                        return Ok(None);
+                    }
+                };
+
                 let init_params = ChildLspInitParams {
                     lang: lang.to_string(),
                     binary_name,
                     args,
-                    root_uri_base: root_uri_base.to_string(),
-                    virtual_uri: virtual_uri.clone(),
-                    virtual_doc_content: std::sync::Arc::new(vdoc.content.clone()),
+                    root_uri,
+                    file_uri: file_uri.clone(),
+                    file_content: vdoc.content.clone(),
                     init_options: self.config.get_init_options(&lang),
                 };
 

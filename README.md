@@ -84,6 +84,8 @@ RUST_LOG=literate_lsp=debug hx README.md
 
 ## Configuration
 
+### LSP Configuration
+
 Literate-lsp reads from Helix's `languages.toml` - the same config file you already use. It automatically picks up:
 
 - LSP binaries and paths
@@ -91,6 +93,30 @@ Literate-lsp reads from Helix's `languages.toml` - the same config file you alre
 - Custom initialization parameters
 
 Create a local `./.languages.toml` in your project to override settings for that repo only.
+
+### Virtual Document Output
+
+By default, literate-lsp writes virtual documents to `./src/`. To customize this, create a `.literate.toml` file in your project root:
+
+```toml
+[literate]
+# Where to write extracted code files (relative to project root)
+output_dir = "./generated"
+```
+
+This is useful for:
+
+- Keeping generated files separate from source
+- Running code blocks directly
+- Accessing files in your version control workflow
+
+Generated files are not cleaned up automatically - add them to `.gitignore` if desired:
+
+```gitignore
+src/*.rs
+src/*.py
+src/*.go
+```
 
 ## The Why
 

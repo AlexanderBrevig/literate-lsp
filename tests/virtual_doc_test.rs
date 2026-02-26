@@ -133,7 +133,7 @@ fn test_position_mapping() {
         },
     ];
 
-    let mapper = PositionMapper::new(blocks);
+    let mapper = PositionMapper::new(&blocks);
 
     // Test mapping markdown to virtual
     // Line 8 (first block content) column 2 should map to virtual line 0, column 2

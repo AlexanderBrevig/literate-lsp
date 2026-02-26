@@ -1,6 +1,7 @@
 pub mod child_lsp;
 pub mod child_lsp_init;
 pub mod config;
+pub mod disk_vdoc;
 pub mod health;
 pub mod position;
 pub mod request_mapper;

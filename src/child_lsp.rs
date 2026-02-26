@@ -203,7 +203,6 @@ impl ChildLspManager {
     }
 
     pub async fn did_open(&self, uri: String, language_id: String, content: String) -> Result<()> {
-
         let params = json!({
             "textDocument": {
                 "uri": uri,

@@ -163,7 +163,9 @@ fn test_goto_definition() {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Send definition request at line 14 (0-indexed), column 2
-    // This is the `square` in `5 square .`
+    // Line 14 has "5 fib ." - column 2 is the 'f' in 'fib'
+    // In the markdown: line 8 defines fib, line 14 uses it
+    println!("\nSending definition request for position line:14 char:2 (the 'fib' in '5 fib .')");
     send_request(&mut writer, "textDocument/definition", json!({
         "textDocument": {
             "uri": "file:///home/ab/github.com/literate-lsp/example.md",
@@ -177,6 +179,23 @@ fn test_goto_definition() {
     let response = read_response(&mut reader);
     println!("Definition response: {}", serde_json::to_string_pretty(&response).unwrap());
 
+    // Give the server time to process the request and write files
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Verify that virtual documents were written to disk after the request
+    // Check where the file was written based on .literate.toml config
+    let possible_dirs = vec!["./src", "./code"];
+    let forth_file = possible_dirs
+        .iter()
+        .map(|dir| std::path::PathBuf::from(dir).join("example.forth"))
+        .find(|path| path.exists())
+        .expect("example.forth should exist in either ./src/ or ./code/ after definition request");
+
+    let forth_content = std::fs::read_to_string(&forth_file)
+        .expect("Failed to read generated example.forth");
+    println!("Generated forth file:\n{}", forth_content);
+    assert!(forth_content.contains("fib"), "Forth file should contain 'fib' definition");
+
     // Verify the response
     assert!(response.get("result").is_some(), "Response should have a result field");
 
@@ -184,8 +203,10 @@ fn test_goto_definition() {
 
     // Result can be null if definition not found, or a Location/Location[] array
     if result.is_null() {
-        println!("Definition not found (LSP returned null)");
-        panic!("Definition should be found!");
+        println!("ERROR: Definition not found (LSP returned null)");
+        println!("Generated forth file was:");
+        println!("{}", forth_content);
+        panic!("Definition should be found! forth-lsp should return a location for 'fib'");
     } else if let Some(location) = result.as_object() {
         // Single Location object
         let uri = location.get("uri").and_then(|u| u.as_str()).unwrap_or("");
@@ -199,7 +220,7 @@ fn test_goto_definition() {
             .and_then(|l| l.as_u64())
             .expect("Response should have a line number") as u32;
 
-        // The definition should be at line 8 (0-indexed) where `square` is defined
+        // The definition should be at line 8 (0-indexed) where `fib` is defined
         println!("Result line: {}", line);
         assert_eq!(line, 8, "Definition should be at line 8 (0-indexed)");
     } else if let Some(locations) = result.as_array() {
@@ -217,7 +238,7 @@ fn test_goto_definition() {
             .and_then(|l| l.as_u64())
             .expect("Response should have a line number") as u32;
 
-        // The definition should be at line 8 (0-indexed) where `square` is defined
+        // The definition should be at line 8 (0-indexed) where `fib` is defined
         println!("Result line: {}", line);
         assert_eq!(line, 8, "Definition should be at line 8 (0-indexed)");
     } else {

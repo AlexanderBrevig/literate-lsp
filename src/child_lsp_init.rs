@@ -1,7 +1,6 @@
 use crate::child_lsp::ChildLspManager;
 use crate::utils::logging;
 use anyhow::Result;
-use std::sync::Arc;
 use tracing::debug;
 
 /// Parameters required to initialize a child LSP
@@ -9,9 +8,9 @@ pub struct ChildLspInitParams {
     pub lang: String,
     pub binary_name: String,
     pub args: Vec<String>,
-    pub root_uri_base: String,
-    pub virtual_uri: String,
-    pub virtual_doc_content: Arc<String>,
+    pub root_uri: String,
+    pub file_uri: String,
+    pub file_content: String,
     pub init_options: Option<serde_json::Value>,
 }
 
@@ -30,7 +29,7 @@ impl ChildLspInitializer {
     /// Orchestrates:
     /// 1. Spawn child process
     /// 2. Initialize LSP connection
-    /// 3. Open virtual document
+    /// 3. Open virtual document (from disk file)
     ///
     /// Returns the initialized LSP and language, or an error message for user display
     /// Caller is responsible for caching completion triggers after successful initialization
@@ -49,9 +48,9 @@ impl ChildLspInitializer {
             }
         };
 
-        // Stage 2: Initialize
+        // Stage 2: Initialize with project root
         if let Err(e) = lsp
-            .initialize(params.root_uri_base, params.init_options)
+            .initialize(params.root_uri, params.init_options)
             .await
         {
             let msg = format!("Failed to initialize child LSP for '{}': {}", params.lang, e);
@@ -59,16 +58,12 @@ impl ChildLspInitializer {
             return Err(msg);
         }
 
-        // Stage 3: Open document
+        // Stage 3: Open document with content
         if let Err(e) = lsp
-            .did_open(
-                params.virtual_uri,
-                params.lang.clone(),
-                (*params.virtual_doc_content).clone(),
-            )
+            .did_open(params.file_uri, params.lang.clone(), params.file_content)
             .await
         {
-            let msg = format!("Failed to open virtual document for '{}': {}", params.lang, e);
+            let msg = format!("Failed to open document for '{}': {}", params.lang, e);
             debug!("[ChildLspInit] {}", msg);
             return Err(msg);
         }

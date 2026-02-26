@@ -1,7 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{info, warn};
+use std::path::{Path, PathBuf};
+use tracing::{debug, info, warn};
 
 // Embedded Helix languages.toml as fallback default
 const HELIX_LANGUAGES_TOML: &str = include_str!("../helix-languages.toml");
@@ -20,6 +21,24 @@ pub const FORBIDDEN_FORMATS: &[&str] = &[
     "latex",
     "tex",
 ];
+
+/// Configuration for virtual document output
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct VirtualDocConfig {
+    #[serde(default = "default_output_dir")]
+    pub output_dir: String,
+}
+
+fn default_output_dir() -> String {
+    "./src".to_string()
+}
+
+/// Top-level literate-lsp configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LiterateConfig {
+    #[serde(default)]
+    pub literate: VirtualDocConfig,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LspConfig {
@@ -51,6 +70,9 @@ pub struct LanguageConfig {
     #[serde(default)]
     #[serde(rename = "language-servers")]
     pub language_servers: Vec<LanguageServerEntry>,
+    #[serde(default)]
+    #[serde(rename = "file-types")]
+    pub file_types: Vec<String>,
 }
 
 impl LanguageConfig {
@@ -350,6 +372,29 @@ impl Config {
         let lower = lang.to_lowercase();
         FORBIDDEN_FORMATS.contains(&lower.as_str())
     }
+
+    /// Get file extension for a programming language
+    /// Extracts the first file-type from the language definition in helix-languages.toml
+    /// Falls back to language name if no file-type is found
+    pub fn get_extension_for_language(&self, lang: &str) -> Option<String> {
+        // Look for the language in the config
+        if let Some(language) = self.language.iter().find(|l| l.name == lang) {
+            // Return the first file-type if available
+            // file-types are typically in the format ["rs"], ["py", "pyw"], etc.
+            // We just need the first one
+            if !language.file_types.is_empty() {
+                debug!("Extension for '{}': using file-type '{}'", lang, language.file_types[0]);
+                return Some(language.file_types[0].clone());
+            } else {
+                debug!("Extension for '{}': no file-types in config, falling back to language name", lang);
+            }
+        } else {
+            debug!("Extension for '{}': language not found in config, falling back to language name", lang);
+        }
+
+        // Fallback: use language name as extension
+        Some(lang.to_string())
+    }
 }
 
 impl Default for Config {
@@ -507,5 +552,141 @@ typeCheckingMode = "basic"
         } else {
             eprintln!("pyright NOT found in language_server");
         }
+    }
+}
+
+/// Find the project root by walking up the directory tree
+///
+/// Looks for (in order):
+/// 1. `.literate.toml` - literate-lsp configuration file
+/// 2. `.git/` - Git repository
+/// 3. `Cargo.toml` - Rust project
+/// 4. `package.json` - Node.js project
+/// 5. Fallback to parent directory of start_path
+pub fn find_project_root(start_path: &Path) -> PathBuf {
+    let mut current = start_path.to_path_buf();
+
+    // If start_path is a file, begin from its parent
+    if current.is_file() {
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        }
+    }
+
+    let markers = [".literate.toml", ".git", "Cargo.toml", "package.json"];
+
+    loop {
+        // Check for project markers
+        for marker in &markers {
+            let marker_path = current.join(marker);
+            if marker_path.exists() {
+                info!("[Config] Found project root at: {}", current.display());
+                return current;
+            }
+        }
+
+        // Try parent directory
+        match current.parent() {
+            Some(parent) if parent != current => {
+                current = parent.to_path_buf();
+            }
+            _ => {
+                // Reached filesystem root, return current directory
+                info!("[Config] No project root markers found, using: {}", current.display());
+                return current;
+            }
+        }
+    }
+}
+
+/// Load literate-lsp configuration from .literate.toml
+///
+/// Looks for .literate.toml in the project root. If not found, returns default config.
+pub fn load_literate_config(project_root: &Path) -> VirtualDocConfig {
+    let config_path = project_root.join(".literate.toml");
+
+    if !config_path.exists() {
+        info!("[Config] No .literate.toml found at {}, using defaults", project_root.display());
+        return VirtualDocConfig {
+            output_dir: default_output_dir(),
+        };
+    }
+
+    match std::fs::read_to_string(&config_path) {
+        Ok(content) => match toml::from_str::<LiterateConfig>(&content) {
+            Ok(config) => {
+                info!("[Config] Loaded .literate.toml with output_dir: {}", config.literate.output_dir);
+                config.literate
+            }
+            Err(e) => {
+                warn!("[Config] Failed to parse .literate.toml: {}, using defaults", e);
+                VirtualDocConfig {
+                    output_dir: default_output_dir(),
+                }
+            }
+        },
+        Err(e) => {
+            warn!("[Config] Failed to read .literate.toml: {}, using defaults", e);
+            VirtualDocConfig {
+                output_dir: default_output_dir(),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod project_root_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_find_project_root_with_git() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
+
+        // Create .git directory
+        std::fs::create_dir(project_root.join(".git")).unwrap();
+
+        // Start from a subdirectory
+        let subdir = project_root.join("src");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let found_root = find_project_root(&subdir);
+        assert_eq!(found_root, project_root);
+    }
+
+    #[test]
+    fn test_find_project_root_with_cargo() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
+
+        // Create Cargo.toml
+        std::fs::write(project_root.join("Cargo.toml"), "").unwrap();
+
+        let subdir = project_root.join("src");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let found_root = find_project_root(&subdir);
+        assert_eq!(found_root, project_root);
+    }
+
+    #[test]
+    fn test_load_literate_config_default() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = load_literate_config(temp_dir.path());
+        assert_eq!(config.output_dir, "./src");
+    }
+
+    #[test]
+    fn test_load_literate_config_custom() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_content = r#"
+[literate]
+output_dir = "./generated"
+"#;
+        std::fs::write(temp_dir.path().join(".literate.toml"), config_content).unwrap();
+
+        let config = load_literate_config(temp_dir.path());
+        assert_eq!(config.output_dir, "./generated");
     }
 }

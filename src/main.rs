@@ -23,7 +23,12 @@ async fn main() {
     }
 
     // Normal LSP server mode
+    // CRITICAL: All logs MUST go to stderr, not stdout
+    // stdout is used for LSP JSON-RPC protocol communication with the editor
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)  // Disable ANSI colors for cleaner editor output
+        .without_time()    // Disable timestamp duplication (editor provides its own)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing_subscriber::filter::LevelFilter::INFO.into()),
